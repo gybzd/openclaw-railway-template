@@ -6,7 +6,6 @@ import path from "node:path";
 
 import express from "express";
 import httpProxy from "http-proxy";
-import * as tar from "tar";
 
 const PORT = Number.parseInt(process.env.PORT ?? "8080", 10);
 const STATE_DIR =
@@ -27,7 +26,9 @@ function resolveGatewayToken() {
     const existing = fs.readFileSync(tokenPath, "utf8").trim();
     if (existing) return existing;
   } catch (err) {
-    console.warn(`[gateway-token] could not read existing token: ${err.code || err.message}`);
+    console.warn(
+      `[gateway-token] could not read existing token: ${err.code || err.message}`,
+    );
   }
 
   const generated = crypto.randomBytes(32).toString("hex");
@@ -35,7 +36,9 @@ function resolveGatewayToken() {
     fs.mkdirSync(STATE_DIR, { recursive: true });
     fs.writeFileSync(tokenPath, generated, { encoding: "utf8", mode: 0o600 });
   } catch (err) {
-    console.warn(`[gateway-token] could not persist token: ${err.code || err.message}`);
+    console.warn(
+      `[gateway-token] could not persist token: ${err.code || err.message}`,
+    );
   }
   return generated;
 }
@@ -103,14 +106,18 @@ async function waitForGatewayReady(opts = {}) {
   while (Date.now() - start < timeoutMs) {
     for (const endpoint of endpoints) {
       try {
-        const res = await fetch(`${GATEWAY_TARGET}${endpoint}`, { method: "GET" });
+        const res = await fetch(`${GATEWAY_TARGET}${endpoint}`, {
+          method: "GET",
+        });
         if (res) {
           console.log(`[gateway] ready at ${endpoint}`);
           return true;
         }
       } catch (err) {
         if (err.code !== "ECONNREFUSED") {
-          console.warn(`[gateway] health check error: ${err.code || err.message}`);
+          console.warn(
+            `[gateway] health check error: ${err.code || err.message}`,
+          );
         }
       }
     }
@@ -149,7 +156,12 @@ async function startGateway() {
     },
   });
 
-  console.log(`[gateway] starting with command: ${OPENCLAW_NODE} ${clawArgs(args).join(" ")}`);
+  const safeArgs = args.map((arg, i) =>
+    args[i - 1] === "--token" ? "[REDACTED]" : arg
+  );
+  console.log(
+    `[gateway] starting with command: ${OPENCLAW_NODE} ${clawArgs(safeArgs).join(" ")}`,
+  );
   console.log(`[gateway] STATE_DIR: ${STATE_DIR}`);
   console.log(`[gateway] WORKSPACE_DIR: ${WORKSPACE_DIR}`);
   console.log(`[gateway] config path: ${configPath()}`);
@@ -196,6 +208,31 @@ async function restartGateway() {
   return ensureGatewayRunning();
 }
 
+const setupRateLimiter = {
+  attempts: new Map(),
+  windowMs: 60_000,
+  maxAttempts: 10,
+  cleanupInterval: setInterval(function () {
+    const now = Date.now();
+    for (const [ip, data] of setupRateLimiter.attempts) {
+      if (now - data.windowStart > setupRateLimiter.windowMs) {
+        setupRateLimiter.attempts.delete(ip);
+      }
+    }
+  }, 60_000),
+
+  isRateLimited(ip) {
+    const now = Date.now();
+    const data = this.attempts.get(ip);
+    if (!data || now - data.windowStart > this.windowMs) {
+      this.attempts.set(ip, { windowStart: now, count: 1 });
+      return false;
+    }
+    data.count++;
+    return data.count > this.maxAttempts;
+  },
+};
+
 function requireSetupAuth(req, res, next) {
   if (!SETUP_PASSWORD) {
     return res
@@ -204,6 +241,11 @@ function requireSetupAuth(req, res, next) {
       .send(
         "SETUP_PASSWORD is not set. Set it in Railway Variables before using /setup.",
       );
+  }
+
+  const ip = req.ip || req.socket?.remoteAddress || "unknown";
+  if (setupRateLimiter.isRateLimited(ip)) {
+    return res.status(429).type("text/plain").send("Too many requests. Try again later.");
   }
 
   const header = req.headers.authorization || "";
@@ -215,10 +257,9 @@ function requireSetupAuth(req, res, next) {
   const decoded = Buffer.from(encoded, "base64").toString("utf8");
   const idx = decoded.indexOf(":");
   const password = idx >= 0 ? decoded.slice(idx + 1) : "";
-  const passwordBuf = Buffer.from(password);
-  const expectedBuf = Buffer.from(SETUP_PASSWORD);
-  const isValid = passwordBuf.length === expectedBuf.length &&
-    crypto.timingSafeEqual(passwordBuf, expectedBuf);
+  const passwordHash = crypto.createHash("sha256").update(password).digest();
+  const expectedHash = crypto.createHash("sha256").update(SETUP_PASSWORD).digest();
+  const isValid = crypto.timingSafeEqual(passwordHash, expectedHash);
   if (!isValid) {
     res.set("WWW-Authenticate", 'Basic realm="OpenClaw Setup"');
     return res.status(401).send("Invalid password");
@@ -435,14 +476,27 @@ function runCmd(cmd, args, opts = {}) {
 
 const VALID_FLOWS = ["quickstart", "advanced", "manual"];
 const VALID_AUTH_CHOICES = [
-  "codex-cli", "openai-codex", "openai-api-key",
-  "claude-cli", "token", "apiKey",
-  "gemini-api-key", "google-antigravity", "google-gemini-cli",
-  "openrouter-api-key", "ai-gateway-api-key",
-  "moonshot-api-key", "kimi-code-api-key",
-  "zai-api-key", "minimax-api", "minimax-api-lightning",
-  "qwen-portal", "github-copilot", "copilot-proxy",
-  "synthetic-api-key", "opencode-zen",
+  "codex-cli",
+  "openai-codex",
+  "openai-api-key",
+  "claude-cli",
+  "token",
+  "apiKey",
+  "gemini-api-key",
+  "google-antigravity",
+  "google-gemini-cli",
+  "openrouter-api-key",
+  "ai-gateway-api-key",
+  "moonshot-api-key",
+  "kimi-code-api-key",
+  "zai-api-key",
+  "minimax-api",
+  "minimax-api-lightning",
+  "qwen-portal",
+  "github-copilot",
+  "copilot-proxy",
+  "synthetic-api-key",
+  "opencode-zen",
 ];
 
 function validatePayload(payload) {
@@ -452,7 +506,14 @@ function validatePayload(payload) {
   if (payload.authChoice && !VALID_AUTH_CHOICES.includes(payload.authChoice)) {
     return `Invalid authChoice: ${payload.authChoice}`;
   }
-  const stringFields = ["telegramToken", "discordToken", "slackBotToken", "slackAppToken", "authSecret", "model"];
+  const stringFields = [
+    "telegramToken",
+    "discordToken",
+    "slackBotToken",
+    "slackAppToken",
+    "authSecret",
+    "model",
+  ];
   for (const field of stringFields) {
     if (payload[field] !== undefined && typeof payload[field] !== "string") {
       return `Invalid ${field}: must be a string`;
@@ -493,19 +554,35 @@ app.post("/setup/api/run", requireSetupAuth, async (req, res) => {
 
       const allowInsecureResult = await runCmd(
         OPENCLAW_NODE,
-        clawArgs(["config", "set", "gateway.controlUi.allowInsecureAuth", "true"]),
+        clawArgs([
+          "config",
+          "set",
+          "gateway.controlUi.allowInsecureAuth",
+          "true",
+        ]),
       );
       extra += `[config] gateway.controlUi.allowInsecureAuth=true exit=${allowInsecureResult.code}\n`;
 
       const tokenResult = await runCmd(
         OPENCLAW_NODE,
-        clawArgs(["config", "set", "gateway.auth.token", OPENCLAW_GATEWAY_TOKEN]),
+        clawArgs([
+          "config",
+          "set",
+          "gateway.auth.token",
+          OPENCLAW_GATEWAY_TOKEN,
+        ]),
       );
       extra += `[config] gateway.auth.token exit=${tokenResult.code}\n`;
 
       const proxiesResult = await runCmd(
         OPENCLAW_NODE,
-        clawArgs(["config", "set", "--json", "gateway.trustedProxies", '["127.0.0.1"]']),
+        clawArgs([
+          "config",
+          "set",
+          "--json",
+          "gateway.trustedProxies",
+          '["127.0.0.1"]',
+        ]),
       );
       extra += `[config] gateway.trustedProxies exit=${proxiesResult.code}\n`;
 
@@ -530,14 +607,22 @@ app.post("/setup/api/run", requireSetupAuth, async (req, res) => {
         }
         const set = await runCmd(
           OPENCLAW_NODE,
-          clawArgs(["config", "set", "--json", `channels.${name}`, JSON.stringify(cfgObj)]),
+          clawArgs([
+            "config",
+            "set",
+            "--json",
+            `channels.${name}`,
+            JSON.stringify(cfgObj),
+          ]),
         );
         const get = await runCmd(
           OPENCLAW_NODE,
           clawArgs(["config", "get", `channels.${name}`]),
         );
-        return `\n[${name} config] exit=${set.code} (output ${set.output.length} chars)\n${set.output || "(no output)"}` +
-          `\n[${name} verify] exit=${get.code} (output ${get.output.length} chars)\n${get.output || "(no output)"}`;
+        return (
+          `\n[${name} config] exit=${set.code} (output ${set.output.length} chars)\n${set.output || "(no output)"}` +
+          `\n[${name} verify] exit=${get.code} (output ${get.output.length} chars)\n${get.output || "(no output)"}`
+        );
       }
 
       if (payload.telegramToken?.trim()) {
@@ -637,53 +722,6 @@ app.post("/setup/api/reset", requireSetupAuth, async (_req, res) => {
   } catch (err) {
     res.status(500).type("text/plain").send(String(err));
   }
-});
-
-app.get("/setup/export", requireSetupAuth, async (_req, res) => {
-  fs.mkdirSync(STATE_DIR, { recursive: true });
-  fs.mkdirSync(WORKSPACE_DIR, { recursive: true });
-
-  res.setHeader("content-type", "application/gzip");
-  res.setHeader(
-    "content-disposition",
-    `attachment; filename="openclaw-backup-${new Date().toISOString().replace(/[:.]/g, "-")}.tar.gz"`,
-  );
-
-  const stateAbs = path.resolve(STATE_DIR);
-  const workspaceAbs = path.resolve(WORKSPACE_DIR);
-
-  const dataRoot = "/data";
-  const underData = (p) => p === dataRoot || p.startsWith(dataRoot + path.sep);
-
-  let cwd = "/";
-  let paths = [stateAbs, workspaceAbs].map((p) => p.replace(/^\//, ""));
-
-  if (underData(stateAbs) && underData(workspaceAbs)) {
-    cwd = dataRoot;
-    paths = [
-      path.relative(dataRoot, stateAbs) || ".",
-      path.relative(dataRoot, workspaceAbs) || ".",
-    ];
-  }
-
-  const stream = tar.c(
-    {
-      gzip: true,
-      portable: true,
-      noMtime: true,
-      cwd,
-      onwarn: () => {},
-    },
-    paths,
-  );
-
-  stream.on("error", (err) => {
-    console.error("[export]", err);
-    if (!res.headersSent) res.status(500);
-    res.end(String(err));
-  });
-
-  stream.pipe(res);
 });
 
 const proxy = httpProxy.createProxyServer({
