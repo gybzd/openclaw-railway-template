@@ -12,8 +12,12 @@ RUN apt-get update \
     zip \
   && rm -rf /var/lib/apt/lists/*
 
+# Install OpenClaw + ClawHub
 RUN npm install -g openclaw@latest
 RUN npm install -g clawhub@latest
+
+# Install Python library
+RUN pip3 install --no-cache-dir pdfplumber
 
 WORKDIR /app
 
