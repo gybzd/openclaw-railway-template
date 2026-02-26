@@ -25,7 +25,7 @@ RUN npm install -g playwright \
   && npx playwright install --with-deps chromium
 
 # Install Python library
-RUN pip3 install --no-cache-dir pdfplumber
+RUN pip3 install --no-cache-dir --break-system-packages pdfplumber
 
 WORKDIR /app
 
