@@ -57,3 +57,4 @@ HEALTHCHECK --interval=30s --timeout=5s --start-period=10s \
 
 USER root
 ENTRYPOINT ["./entrypoint.sh"]
+# BUILD_MARKER: playwright+pdfplumber v2
