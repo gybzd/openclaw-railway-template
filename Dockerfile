@@ -1,5 +1,6 @@
 FROM node:22-bookworm
 
+# System deps (add python3-pip for pip3)
 RUN apt-get update \
   && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
     ca-certificates \
@@ -8,6 +9,7 @@ RUN apt-get update \
     gosu \
     procps \
     python3 \
+    python3-pip \
     build-essential \
     zip \
   && rm -rf /var/lib/apt/lists/*
@@ -15,6 +17,12 @@ RUN apt-get update \
 # Install OpenClaw + ClawHub
 RUN npm install -g openclaw@latest
 RUN npm install -g clawhub@latest
+
+# --- Browser automation deps (Playwright + Chromium) ---
+# Persist browsers in /data so redeploys don't re-download if /data is a volume
+ENV PLAYWRIGHT_BROWSERS_PATH=/data/ms-playwright
+RUN npm install -g playwright \
+  && npx playwright install --with-deps chromium
 
 # Install Python library
 RUN pip3 install --no-cache-dir pdfplumber
